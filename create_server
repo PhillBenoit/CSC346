@@ -1,0 +1,97 @@
+#! /usr/bin/python3
+
+"""
+Phillip Benoit
+CSC346
+Project 7 & 8 (FlyRC)
+On demand EC2 server creation interface
+"""
+
+import os
+import MySQLdb
+import random
+import cgi
+import boto3
+from lib import passwd, http_response, strings
+
+connection = MySQLdb.connect(host=passwd.SQL_HOST,
+                             user=passwd.SQL_USER,
+                             passwd=passwd.SQL_PASS,
+                             db=passwd.SQL_DBID)
+
+ec2_r = boto3.resource("ec2", "us-east-1")
+
+# SQL commands
+SQL_INSERT = 'INSERT INTO servers (owner, description, ec2id, user1pw, user2pw) VALUES (%s, %s, %s, %s, %s);'
+
+
+def generate_pw():
+    return str(random.randint(1000, 9999))
+
+
+def main():
+
+    # get address for responses
+    server_and_port, address = http_response.parse_redirect(os.environ, connection)
+
+    # get user from cookie info
+    user = strings.parse_user(os.environ, connection)
+
+    # redirect to login if user could not be found
+    if user == "":
+        http_response.redirect_set_cookie(address, "0", connection)
+
+    # get arguments
+    args = cgi.FieldStorage()
+
+    # get description
+    if strings.DESC_URLKEY not in args:
+        desc = ''
+    else:
+        desc = args[strings.DESC_URLKEY].value
+
+    # start ec2 instance
+    new_server = ec2_r.create_instances(
+        MinCount=1,
+        MaxCount=1,
+        ImageId='ami-04ad2567c9e3d7893',
+        InstanceType='t2.nano',
+        KeyName='vockey',
+        UserData=strings.USERDATA.replace('xxxx', server_and_port),
+        SecurityGroupIds=["shell_script"]
+    )[0]
+
+    ec2ip = new_server.private_ip_address
+
+    # generate user passwords
+    u1pw = generate_pw()
+    u2pw = generate_pw()
+
+    # user password temp files for bash scripting
+    os.mkdir(ec2ip)
+    with open("./"+ec2ip+"/u1", 'w') as f:
+        f.write(u1pw + '\n')
+        f.write('yes\n')
+    with open("./"+ec2ip+"/u2", 'w') as f:
+        f.write(u2pw + '\n')
+        f.write('yes\n')
+
+    # sql
+    cursor = connection.cursor()
+    cursor.execute(SQL_INSERT, (user, desc, new_server.instance_id, u1pw, u2pw))
+    connection.commit()
+
+    # save returned ID
+    dbid = str(cursor.lastrowid)
+
+    cursor.close()
+
+    # start add users script in background
+    os.system('/var/www/cgi-bin/users xxx yyy 1>/dev/null 2>/dev/null &'
+              .replace('xxx', ec2ip).replace('yyy', dbid))
+
+    # return redirect
+    http_response.respond(http_response.REDIRECT_IDX, connection, address)
+
+
+main()

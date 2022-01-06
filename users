@@ -1,0 +1,17 @@
+#! /bin/bash
+
+# wait for server to become active
+while [[ $(ssh -o "StrictHostKeyChecking no" ec2-user@$1 -t ps -ef 2>/dev/null | grep "c thelounge") == "" ]]
+do
+sleep 15
+done
+
+# install users
+ssh -o "StrictHostKeyChecking no" ec2-user@$1 -tt sudo docker exec --user node -ti thelounge thelounge add user1 < ./$1/u1
+ssh -o "StrictHostKeyChecking no" ec2-user@$1 -tt sudo docker exec --user node -ti thelounge thelounge add user2 < ./$1/u2
+
+# update SQL database
+mysql -u $(./lib/passwd.py u) -p$(./lib/passwd.py p) -D $(./lib/passwd.py d) -h $(./lib/passwd.py h) -e "UPDATE servers SET ready = 1 WHERE id = '${2}';"
+
+# delete temp files
+rm -r $1

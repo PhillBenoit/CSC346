@@ -1,0 +1,77 @@
+#! /usr/bin/python3
+
+"""
+Phillip Benoit
+CSC346
+Project 7 & 8 (FlyRC)
+Destroy server handler
+"""
+
+import boto3
+import cgi
+import os
+import MySQLdb
+from lib import passwd, http_response, strings
+
+connection = MySQLdb.connect(host=passwd.SQL_HOST,
+                             user=passwd.SQL_USER,
+                             passwd=passwd.SQL_PASS,
+                             db=passwd.SQL_DBID)
+
+SELECT_EC2ID = "SELECT ec2id FROM servers WHERE id = %s;"
+DELETE_RECORD = "DELETE FROM servers WHERE id = %s;"
+
+ec2_r = boto3.resource("ec2", "us-east-1")
+
+
+def main():
+
+    # address parse
+    server_and_port, address = http_response.parse_redirect(os.environ, connection)
+
+    # user parse
+    user = strings.parse_user(os.environ, connection)
+
+    # redirect to login if user could not be parsed
+    if user == "":
+        http_response.redirect_set_cookie(address, "0", connection)
+
+    # get arguments
+    args = cgi.FieldStorage()
+
+    # make sure id has been passed
+    if strings.ID_FKEY not in args:
+        dbid = ""
+        http_response.respond(http_response.BAD_RQ_IDX, connection)
+
+    # get id
+    else:
+        dbid = args[strings.ID_FKEY].value
+
+    # get ec2id
+    cursor = connection.cursor(cursorclass=MySQLdb.cursors.DictCursor)
+    cursor.execute(SELECT_EC2ID, (dbid,))
+    result = cursor.fetchall()
+    cursor.close()
+
+    # make sure an ec2id was returned
+    if result:
+        ec2id = result[0][strings.EC2ID_FKEY]
+    else:
+        ec2id = ""
+        http_response.respond(http_response.BAD_RQ_IDX, connection)
+
+    # send terminate command to amazon
+    ec2_r.Instance(ec2id).terminate()
+
+    # remove server from the database
+    cursor = connection.cursor()
+    cursor.execute(DELETE_RECORD, (dbid,))
+    connection.commit()
+    cursor.close()
+
+    # redirect to the ui
+    http_response.respond(http_response.REDIRECT_IDX, connection, address)
+
+
+main()

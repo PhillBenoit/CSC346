@@ -1,0 +1,163 @@
+#! /usr/bin/python3
+
+"""
+Phillip Benoit
+CSC346
+Project 7 & 8 (FlyRC)
+UI for server data via MySQL
+"""
+
+import os
+import MySQLdb
+import boto3
+from lib import passwd, http_response, strings
+
+connection = MySQLdb.connect(host=passwd.SQL_HOST,
+                             user=passwd.SQL_USER,
+                             passwd=passwd.SQL_PASS,
+                             db=passwd.SQL_DBID)
+
+ec2_r = boto3.resource("ec2", "us-east-1")
+
+SELECT_SERVERS = "SELECT id, description, ec2id, ready, user1pw, user2pw FROM servers WHERE owner = %s;"
+
+HTML_HEAD = '''
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01
+Transitional//EN"
+"http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<head><title>XXX</title></head>
+<body>
+'''
+
+HTML_LOGIN_BODY = '''
+<h1>FlyRC Login</h1><br>
+<form action=/cgi-bin/login method=post>
+Username: <input type=text name=user>
+<input type=submit>
+</form>
+'''
+
+HTML_FOOT = '''
+</body></html>
+'''
+
+HTML_TABLE_FOOT = '''
+
+</table><br>
+<input id="destroy" type=submit value="Destroy Server" disabled><br>
+</form>
+'''
+
+HTML_SERVERS_FOOT = '''
+<br><form action=/cgi-bin/create_server method=post>
+Description: <input type=text name=desc>
+<input type=submit value="Create Server">
+</form>
+<script>
+function enable_destroy() {
+    document.getElementById("destroy").disabled = false;
+}
+</script>
+''' + HTML_FOOT
+
+
+# send the login page to the user
+def return_login():
+    page = HTML_HEAD.replace("XXX", "FlyRC Login")
+    page += HTML_LOGIN_BODY
+    page += HTML_FOOT
+    http_response.respond(http_response.OK_IDX, connection, page)
+
+
+# send the user interface
+def return_servers(user):
+
+    # SQL query for user's existing servers
+    cursor = connection.cursor(cursorclass=MySQLdb.cursors.DictCursor)
+    cursor.execute(SELECT_SERVERS, (user,))
+    json_results = cursor.fetchall()
+    cursor.close()
+
+    # append results
+    for record in json_results:
+
+        # save fields
+        ec2id = record[strings.EC2ID_FKEY]
+        ready = record[strings.READY_FKEY]
+
+        # remove fields
+        del record[strings.EC2ID_FKEY]
+        del record[strings.READY_FKEY]
+
+        # get IP if ready
+        if ready == 1:
+            address = ec2_r.Instance(ec2id).public_ip_address
+        else:
+            address = ''
+        record[strings.ADDR_FKEY] = address
+
+    # HTML page
+    page = HTML_HEAD.replace("XXX", user + "'s FlyRC Servers")
+    page += "<h1>FlyRC Servers</h1><br>\n"
+    page += "logged in as " + user + "<br>\n"
+
+    # servers table
+    if json_results:
+
+        page += "<form action=/cgi-bin/destroy method=post>\n"
+        page += "<table border=1>\n"
+
+        # header row
+        page += "<tr>\n"
+        page += "<th>Select</th>"
+        for field in json_results[0]:
+            page += "<th>"+field+"</th>"
+        page += "</tr>\n"
+
+        # data from query
+        for result in json_results:
+            page += "<tr>\n"
+
+            # radio button to select for termination
+            page += '<td><input onclick="enable_destroy()" type="radio" ' \
+                    'name="id" value="'+str(result[strings.ID_FKEY])+'"></td>'
+
+            for field in result:
+
+                # href for new server that will pop open a new tab
+                if field == strings.ADDR_FKEY:
+                    page += '<td><a href="http://' + str(result[field]) + \
+                            '" target="_blank" rel="noopener noreferrer">' + str(result[field]) + '</a></td>'
+
+                # all other fields
+                else:
+                    page += '<td>'+str(result[field])+'</td>'
+
+            # end of table row
+            page += "\n</tr>\n"
+
+        # table foot and destroy button
+        page += HTML_TABLE_FOOT
+
+    # server create input, enable destroy button javascript, and generic footer
+    page += HTML_SERVERS_FOOT
+
+    # send page
+    http_response.respond(http_response.OK_IDX, connection, page)
+
+
+def main():
+
+    # get user from cookie data
+    user = strings.parse_user(os.environ, connection)
+
+    # if user could not be found, redirect to login
+    if user == "":
+        return_login()
+
+    # if a valid user is logged in, display their servers
+    return_servers(user)
+
+
+main()
